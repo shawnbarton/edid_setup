@@ -25,7 +25,7 @@ Everything is idempotent (safe to re-run), verbosely logged to `/var/log/dell-8b
 
 ```bash
 # Fresh install (review first — you are piping a script into root bash)
-curl -fsSL https://raw.githubusercontent.com/<user>/edid_setup/main/dell-8bpc-edid.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/shawnbarton/edid_setup/main/dell-8bpc-edid.sh | sudo bash
 
 # Or download, inspect, run
 sudo ./dell-8bpc-edid.sh --dry-run    # show exactly what would be done, change nothing
