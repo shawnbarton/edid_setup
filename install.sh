@@ -48,6 +48,8 @@ HOOK_DIR="${EDID_INITRAMFS_HOOK_DIR:-/etc/initramfs-tools/hooks}"
 UPDATE_INITRAMFS="${EDID_UPDATE_INITRAMFS:-update-initramfs}"
 LSINITRAMFS="${EDID_LSINITRAMFS:-lsinitramfs}"
 BACKUP_DIR="${EDID_BACKUP_DIR:-/var/backups/dell-8bpc-edid}"
+EDID_DECODE="${EDID_DECODE_CMD:-edid-decode}"
+APT_GET="${EDID_APT_GET:-apt-get}"
 HOOK_FILE="$HOOK_DIR/dell-8bpc-edid"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
@@ -77,9 +79,18 @@ fi
 touch "$LOG_FILE" 2>/dev/null || LOG_FILE=/dev/null
 command -v python3 >/dev/null 2>&1 || die "preflight" "python3 is required but not found" 2
 
-HAVE_DECODE=0
-if command -v edid-decode >/dev/null 2>&1; then HAVE_DECODE=1
-else log "WARNING: edid-decode not found; proceeding on internal checks only"; fi
+ensure_edid_decode() {
+  command -v "${EDID_DECODE%% *}" >/dev/null 2>&1 && return 0
+  log "edid-decode not found; attempting automatic install via ${APT_GET%% *}"
+  if command -v "${APT_GET%% *}" >/dev/null 2>&1; then
+    if $APT_GET install -y edid-decode >>"$LOG_FILE" 2>&1 \
+       && command -v "${EDID_DECODE%% *}" >/dev/null 2>&1; then
+      log "edid-decode installed automatically"
+      return 0
+    fi
+  fi
+  die "preflight" "edid-decode is required (validation gate) and could not be auto-installed. Install it manually: apt-get install edid-decode" 2
+}
 
 log "=== run start: dry_run=$DRY_RUN uninstall=$UNINSTALL purge=$PURGE force_count=$FORCE_COUNT target='$TARGET_NAME'"
 
@@ -312,6 +323,7 @@ fi
 
 # ---------------------------------------------------------------- discovery
 initramfs_tooling_required
+ensure_edid_decode
 
 declare -a M_CONN=() M_SERIAL=() M_FILE=()
 shopt -s nullglob
@@ -325,15 +337,18 @@ trap 'rm -rf "$WORK"' EXIT
 
 for edid_path in "${candidates[@]}"; do
   conn="$(basename "$(dirname "$edid_path")" | sed -E 's/^card[0-9]+-//')"
-  size=$(stat -c%s "$edid_path" 2>/dev/null || echo 0)
+  # NOTE: sysfs EDID files are binary attributes that stat as size 0 regardless
+  # of content; the data only exists when actually read. Never use stat here.
+  cp "$edid_path" "$WORK/$conn.orig.bin" 2>/dev/null || : > "$WORK/$conn.orig.bin"
+  size=$(wc -c < "$WORK/$conn.orig.bin" 2>/dev/null || echo 0)
   if [[ "$size" -eq 0 ]]; then
     log "connector $conn: no EDID (disconnected) — skipped"; continue
   fi
-  info="$(python3 - "$edid_path" <<'PYEOF'
+  info="$(python3 - "$WORK/$conn.orig.bin" <<'PYEOF'
 import sys
 d = open(sys.argv[1], 'rb').read()
 def fail(m): print("INVALID|" + m); sys.exit(0)
-if len(d) not in (128, 256): fail(f"length {len(d)}")
+if len(d) < 128 or len(d) % 128: fail(f"length {len(d)}")
 if d[:8] != bytes.fromhex('00ffffffffffff00'): fail("bad header")
 if sum(d[:128]) % 256 != 0: fail("block-0 checksum invalid")
 name = serial = ""
@@ -358,12 +373,36 @@ PYEOF
   fi
   log "connector $conn: MATCH '$name' serial=$serial byte20=$byte20 depth=${depth}bpc"
   M_CONN+=("$conn"); M_SERIAL+=("$serial")
-  cp "$edid_path" "$WORK/$conn.orig.bin"
 done
 
 count=${#M_CONN[@]}
 log "matched monitors: $count (expected 2)"
+
+diag_connectors() {
+  log "--- discovery diagnostics ---"
+  local p conn card drv sz
+  for p in "${candidates[@]}"; do
+    conn="$(basename "$(dirname "$p")")"
+    card="${conn%%-*}"
+    drv="$(basename "$(readlink -f "/sys/class/drm/$card/device/driver" 2>/dev/null)" 2>/dev/null || true)"
+    sz="$(wc -c < "$p" 2>/dev/null || echo '?')"
+    log "  $conn: edid_read_bytes=$sz driver=${drv:-unknown}"
+  done
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    local smi; smi="$(nvidia-smi 2>&1 | head -3 || true)"
+    log "  nvidia-smi: $(head -1 <<<"$smi")"
+    if grep -qi 'version mismatch' <<<"$smi"; then
+      log "  HINT: Nvidia driver/library version mismatch — a driver update is pending activation. REBOOT and re-run this script."
+    fi
+  else
+    log "  nvidia-smi: not present"
+  fi
+  log "  HINT: monitors must be connected, powered on, and driven by a functional GPU driver when this script runs."
+  log "--- end diagnostics ---"
+}
+
 if [[ "$count" -ne 2 && "$FORCE_COUNT" -ne 1 ]]; then
+  diag_connectors
   die "discovery" "Expected exactly 2 matched '$TARGET_NAME' monitors, found $count. Use --force-count to override." 3
 fi
 [[ "$count" -ge 1 ]] || die "discovery" "Nothing to do: 0 matched monitors." 3
@@ -389,14 +428,12 @@ PYEOF
   else
     log "connector $conn: byte20 $b20chg checksum $ckchg"
   fi
-  if [[ "$HAVE_DECODE" -eq 1 ]]; then
-    dec="$(edid-decode --check "$out" 2>&1 || true)"
-    grep -q 'Bits per primary color channel: 8' <<<"$dec" \
-      || die "edid-decode" "connector $conn: modified EDID does not report 8 bpc" 5
-    grep -q 'EDID conformity: PASS' <<<"$dec" \
-      || die "edid-decode" "connector $conn: modified EDID failed conformity (see: edid-decode $out)" 5
-    log "connector $conn: edid-decode gate PASS (8 bpc, conformant)"
-  fi
+  dec="$($EDID_DECODE --check "$out" 2>&1 || true)"
+  grep -q 'Bits per primary color channel: 8' <<<"$dec" \
+    || die "edid-decode" "connector $conn: modified EDID does not report 8 bpc" 5
+  grep -q 'EDID conformity: PASS' <<<"$dec" \
+    || die "edid-decode" "connector $conn: modified EDID failed conformity (see: edid-decode $out)" 5
+  log "connector $conn: edid-decode gate PASS (8 bpc, conformant)"
   M_FILE+=("$(basename "$out")")
 done
 
