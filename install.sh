@@ -428,12 +428,32 @@ PYEOF
   else
     log "connector $conn: byte20 $b20chg checksum $ckchg"
   fi
-  dec="$($EDID_DECODE --check "$out" 2>&1 || true)"
-  grep -q 'Bits per primary color channel: 8' <<<"$dec" \
+  # Differential conformity gate: vendor EDIDs often fail edid-decode's
+  # pedantic checks AS SHIPPED (and strictness varies by edid-decode version),
+  # so we do not demand absolute PASS — we demand 8 bpc and NO NEW failures
+  # relative to the unmodified original.
+  extract_failures() { sed -n '/^Failures:/,/^EDID conformity/p' <<<"$1" | grep -v -e '^Failures:' -e '^EDID conformity' -e '^[[:space:]]*$' | sort -u; }
+  orig_dec="$($EDID_DECODE --check "$WORK/$conn.orig.bin" 2>&1 || true)"
+  mod_dec="$($EDID_DECODE --check "$out" 2>&1 || true)"
+  grep -q 'Bits per primary color channel: 8' <<<"$mod_dec" \
     || die "edid-decode" "connector $conn: modified EDID does not report 8 bpc" 5
-  grep -q 'EDID conformity: PASS' <<<"$dec" \
-    || die "edid-decode" "connector $conn: modified EDID failed conformity (see: edid-decode $out)" 5
-  log "connector $conn: edid-decode gate PASS (8 bpc, conformant)"
+  if grep -q 'EDID conformity: PASS' <<<"$mod_dec"; then
+    log "connector $conn: edid-decode gate PASS (8 bpc, fully conformant)"
+  else
+    orig_f="$(extract_failures "$orig_dec")"
+    mod_f="$(extract_failures "$mod_dec")"
+    new_f="$(grep -Fxv -f <(printf '%s\n' "$orig_f") <(printf '%s\n' "$mod_f") || true)"
+    if [[ -z "$new_f" ]]; then
+      log "connector $conn: edid-decode gate PASS (8 bpc; $(wc -l <<<"$orig_f") pre-existing nonconformity line(s) unchanged from original)"
+    else
+      mkdir -p "$BACKUP_DIR"
+      cp "$WORK/$conn.orig.bin" "$BACKUP_DIR/$conn.orig.$STAMP.bin"
+      cp "$out" "$BACKUP_DIR/$conn.modified.$STAMP.bin"
+      err "connector $conn: modification introduced NEW conformity failures:"
+      while IFS= read -r l; do err "  NEW: $l"; done <<<"$new_f"
+      die "edid-decode" "connector $conn: gate failed; originals preserved in $BACKUP_DIR for inspection" 5
+    fi
+  fi
   M_FILE+=("$(basename "$out")")
 done
 
