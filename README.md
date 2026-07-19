@@ -25,11 +25,11 @@ Everything is idempotent (safe to re-run), verbosely logged to `/var/log/dell-8b
 
 ```bash
 # Fresh install (review first — you are piping a script into root bash)
-curl -fsSL https://raw.githubusercontent.com/<user>/edid_setup/main/dell-8bpc-edid.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/shawnbarton/edid_setup/refs/heads/master/install.sh | sudo bash
 
 # Or download, inspect, run
-sudo ./dell-8bpc-edid.sh --dry-run    # show exactly what would be done, change nothing
-sudo ./dell-8bpc-edid.sh              # install
+sudo ./install.sh --dry-run    # show exactly what would be done, change nothing
+sudo ./install.sh              # install
 sudo reboot
 ```
 
@@ -45,8 +45,8 @@ edid-decode /sys/class/drm/card*-DP-*/edid | grep -i "bits per primary"
 ### Uninstall
 
 ```bash
-sudo ./dell-8bpc-edid.sh --uninstall           # remove kernel param + initramfs hook
-sudo ./dell-8bpc-edid.sh --uninstall --purge   # also delete the firmware files
+sudo ./install.sh --uninstall           # remove kernel param + initramfs hook
+sudo ./install.sh --uninstall --purge   # also delete the firmware files
 sudo reboot
 ```
 
@@ -82,7 +82,7 @@ Different monitor? Set `EDID_TARGET_NAME` to the product name exactly as it appe
 
 ## Repository contents
 
-- `dell-8bpc-edid.sh` — the installer (self-contained; no network access at runtime)
+- `install.sh` — the installer (self-contained; no network access at runtime)
 
 ## License / warranty
 
