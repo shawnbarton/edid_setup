@@ -37,9 +37,14 @@ Both monitors must be **connected and powered on** when you run it (the EDID is 
 
 ### Verify after reboot
 
+Run this **only after an install that reached the SUMMARY block, followed by a reboot** — before that, monitors will correctly still report 10 bpc.
+
 ```bash
-edid-decode /sys/class/drm/card*-DP-*/edid | grep -i "bits per primary"
-# Expect: Bits per primary color channel: 8   (for each overridden output)
+for f in /sys/class/drm/card*-DP-*/edid; do
+  [ "$(wc -c < "$f" 2>/dev/null)" -gt 0 ] 2>/dev/null || continue   # sysfs EDIDs stat as 0; must be read
+  echo "$f: $(edid-decode "$f" 2>/dev/null | grep -m1 'Bits per primary')"
+done
+# Expect for each overridden output: Bits per primary color channel: 8
 ```
 
 ### Uninstall
