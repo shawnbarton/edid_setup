@@ -25,7 +25,7 @@ Everything is idempotent (safe to re-run), verbosely logged to `/var/log/dell-8b
 
 ```bash
 # Fresh install (review first — you are piping a script into root bash)
-curl -fsSL https://raw.githubusercontent.com/shawnbarton/edid_setup/refs/heads/master/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/<user>/edid_setup/main/dell-8bpc-edid.sh | sudo bash
 
 # Or download, inspect, run
 sudo ./dell-8bpc-edid.sh --dry-run    # show exactly what would be done, change nothing
@@ -33,7 +33,7 @@ sudo ./dell-8bpc-edid.sh              # install
 sudo reboot
 ```
 
-Both monitors must be **connected and powered on** when you run it (the EDID is read live).
+Both monitors must be **connected and powered on** when you run it (the EDID is read live), and the Nvidia driver must be functional — check that `nvidia-smi` prints a table first. In particular, **reboot after any Nvidia driver update before running**: in the post-update, pre-reboot state (`Failed to initialize NVML: Driver/library version mismatch`) the GPU's connectors expose no EDIDs and discovery will correctly find nothing. If discovery fails, the script logs per-connector diagnostics (EDID bytes read, owning driver, nvidia-smi state) to tell you why.
 
 ### Verify after reboot
 
@@ -70,7 +70,7 @@ Different monitor? Set `EDID_TARGET_NAME` to the product name exactly as it appe
 ## Requirements
 
 - Ubuntu-family distro with `initramfs-tools` (tested targets: TUXEDO OS 24.04 base, Pop!_OS)
-- `bash`, `python3`, `update-initramfs`; `edid-decode` strongly recommended (validation gate is skipped with a warning without it)
+- `bash`, `python3`, `update-initramfs`, `edid-decode` — edid-decode is **required** (it is the validation gate); on apt systems the script installs it automatically, otherwise it exits cleanly at preflight with instructions
 - Nvidia proprietary driver with DRM modesetting (`nvidia_drm`) — the `drm.edid_firmware` override is honored on driver series ~570+
 
 ## Caveats
